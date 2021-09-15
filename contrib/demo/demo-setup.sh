@@ -1,4 +1,5 @@
 #!/bin/bash
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 
 trap cleanup 1 2 3 6
 
@@ -23,7 +24,11 @@ KCP_ROOT="${DEMO_ROOT}/kcp"
 comment "Getting cm-cli..."
 #TODO: make this multi-arch
 if [ ! -f "kubectl-cm" ]; then
-    wget -qO- https://github.com/open-cluster-management/cm-cli/releases/download/v1.0.0-beta.4/cm_darwin_amd64.tar.gz | tar zxvf -
+    if [ "${OS}" == "darwin" ]; then
+        wget -qO- https://github.com/open-cluster-management/cm-cli/releases/download/v1.0.0-beta.4/cm_darwin_amd64.tar.gz | tar zxvf -
+    else
+        wget -qO- https://github.com/open-cluster-management/cm-cli/releases/download/v1.0.0-beta.4/cm_linux_amd64.tar.gz | tar zxvf -
+    fi
     mv cm kubectl-cm
 fi
 
@@ -62,14 +67,14 @@ fi
 
 kubectl cluster-info
 
-if [[ "$(kubectl get mch | grep Running | wc -l | xargs)" != "1" ]]; then
+if [[ "$(kubectl get mch -A | grep Running | wc -l | xargs)" != "1" ]]; then
     echo "No multiclusterhub running. Please configure a multiclusterhub before executing this script. Exiting..."
     exit 1
 fi
 
-if [[ "$(kubectl get managedcluster --no-headers 2> /dev/null | wc -l | xargs)" != "0" ]]; then
-    echo "Expecting a clean hub for the demo."
-   exit 1
+if [[ "$(kubectl get managedcluster --no-headers 2> /dev/null | grep -v local-cluster | wc -l | xargs)" != "0" ]]; then
+    echo "WARNING: Expecting a clean hub for the demo."
+    #exit 1
 fi
 unset KUBECONFIG
 
@@ -109,13 +114,23 @@ echo "Waiting for KCP server to be up and running..."
 sleep 10
 
 comment "Adding deployment to KCP"
+mkdir -p ${KUBECONFIG_DIR}/kcp
 export KUBECONFIG="${KCP_ROOT}/.kcp/data/admin.kubeconfig"
 kubectl config view --minify=true --raw=true > ${KUBECONFIG_DIR}/kcp/admin.kubeconfig
 kubectl config view --minify=true --raw=true | sed 's/\:6443/\:6443\/clusters\/demo/g' > ${KUBECONFIG_DIR}/kcp/demo.kubeconfig
 kubectl apply -f ${DEMO_ROOT}/resources/deployments.apps.yaml
+if [[ "$?" != 0 ]]; then
+    echo "kubectl apply resource/deployments.apps.yaml failed"
+    cleanup
+    exit 1
+fi
 export KUBECONFIG=${KUBECONFIG_DIR}/kcp/demo.kubeconfig
 kubectl apply -f ${DEMO_ROOT}/resources/deployments.apps.yaml
-
+if [[ "$?" != 0 ]]; then
+    echo "As demo: kubectl apply resource/deployments.apps.yaml failed"
+    cleanup
+    exit 1
+fi
 comment "Starting KCP-OCM controller..."
 ${ROOT_DIR}/kcp-ocm agent \
     --kcp-kubeconfig="${KCP_ROOT}/.kcp/data/admin.kubeconfig" \
@@ -136,3 +151,4 @@ fi
 
 comment "Press any key to stop KCP server and KCP_OCM controller"
 wait 
+cleanup
